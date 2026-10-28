@@ -1,0 +1,61 @@
+diff --git a/README.md b/README.md
+index 48f9838..e11e670 100644
+--- a/README.md
++++ b/README.md
+@@ -23,7 +23,10 @@ One WEX binary and one graphics pkg cover the following macOS versions:
+ | Ventura | 13.7.8 |
+ | Sonoma | 14.8.9 |
+ | Sequoia | 15.8.x |
+-| Tahoe | 26.7 or newer |
++| Tahoe | 26.6 or newer (26.6 support is experimental) |
++
++The Tahoe 26.6 installer range does not establish runtime compatibility of the
++graphics payloads. Runtime instruction, dependency and ABI checks remain required.
+ 
+ Big Sur through Sonoma require the qualified kernel identities. Sequoia and
+ Tahoe accept servicing updates within their OS family while retaining runtime
+diff --git a/README_ja.md b/README_ja.md
+index 2aa82e2..080f79e 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -19,7 +19,10 @@ WEXとWhateverXe Graphicsは、どちらも最新版を使用してください
+ | Ventura | 13.7.8 |
+ | Sonoma | 14.8.9 |
+ | Sequoia | 15.8.x |
+-| Tahoe | 26.7以上 |
++| Tahoe | 26.6以上（26.6対応は実験的） |
++
++Tahoe 26.6を受け付けるインストーラー範囲は、グラフィックス資材の実行時互換性を保証しません。
++実行時の命令列・依存関係・ABI検査は引き続き必要です。
+ 
+ Big Sur〜Sonomaは検証済みカーネルの識別を必要とします。SequoiaとTahoeでは、実行時の命令列・ABI検査を維持した上で、同じOS系列内の更新を受け付けます。将来の更新が検証済みという意味ではありません。
+ 
+diff --git a/WhateverXe/kern_xelp_os.hpp b/WhateverXe/kern_xelp_os.hpp
+index ad85a66..3328bfa 100644
+--- a/WhateverXe/kern_xelp_os.hpp
++++ b/WhateverXe/kern_xelp_os.hpp
+@@ -23,7 +23,8 @@ inline OS kernelOS(const char *version) {
+     }
+     // Servicing updates must not silently bypass ABI setup because the build
+     // date/XNU revision changed. Darwin 24.6 cannot distinguish macOS 15.7
+-    // from 15.8: the package enforces 15.8.x. Darwin 25.6+ covers 26.7+.
++    // from 15.8: the package enforces 15.8.x. Darwin 25.6+ also identifies Tahoe 26.6.x; it does not
++    // distinguish the product-version floor enforced by the installer policy.
+     const char *p=version,*prefix="Darwin Kernel Version ";
+     while (*prefix && *p==*prefix) {++p;++prefix;}
+     if (*prefix) return OS::Unknown;
+diff --git a/tests/kernel_os_updates.cpp b/tests/kernel_os_updates.cpp
+index faf7d82..9554a55 100644
+--- a/tests/kernel_os_updates.cpp
++++ b/tests/kernel_os_updates.cpp
+@@ -10,7 +10,10 @@ int main() {
+     assert(kernelOS(nullptr)==OS::Unknown);
+     assert(kernelOS("")==OS::Unknown);
+     assert(kernelOS("Darwin Kernel Version 24.6.1: update/RELEASE_X86_64")==OS::Sequoia);
++    // Synthetic Darwin strings exercise OS selection, not GPU compatibility.
++    assert(kernelOS("Darwin Kernel Version 25.6.0: synthetic/RELEASE_X86_64")==OS::Tahoe);
+     assert(kernelOS("Darwin Kernel Version 25.6.1: update/RELEASE_X86_64")==OS::Tahoe);
++    assert(kernelOS("Darwin Kernel Version 25.6.2: synthetic/RELEASE_X86_64")==OS::Tahoe);
+     assert(kernelOS("Darwin Kernel Version 25.7.0: update/RELEASE_X86_64")==OS::Tahoe);
+     const char *rejected[] {
+         "Darwin Kernel Version 23.6.0: update/RELEASE_X86_64",

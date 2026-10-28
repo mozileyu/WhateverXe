@@ -1,0 +1,74 @@
+name: Stage4C native Tahoe 26.6 verification
+on:
+  push:
+    branches: [codex/stage4c-tahoe266-native]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-26-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: b00t0x/WhateverXe
+          ref: 68a24273ea9ba668e7bb029ed60fd775c45b16d1
+          path: reference
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: b00t0x/WhateverXe-Graphics
+          ref: b4d3889206a609e29e991a833d8d91c2d110a661
+          path: graphics
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacKernelSDK
+          ref: 05094e5e88cec7caedbfb35e8449ed0db94bf95b
+          path: MacKernelSDK
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/Lilu
+          ref: 1.7.2
+          path: build/dependencies/Lilu
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare original upstream dependencies
+        shell: bash
+        run: |
+          mkdir -p Lilu.kext/Contents/Resources
+          ln -s "$GITHUB_WORKSPACE/build/dependencies/Lilu/Lilu/Headers" Lilu.kext/Contents/Resources/Headers
+          ln -s "$GITHUB_WORKSPACE/build/dependencies/Lilu/Lilu/Library" Lilu.kext/Contents/Resources/Library
+          curl -fL --retry 3 -o "$RUNNER_TEMP/rcodesign.tar.gz" https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-macos-universal.tar.gz
+          echo "d98372d5524226ccf9dc0eda03d4e4f5826182dabb2fc3f2bd303ed9113a748d  $RUNNER_TEMP/rcodesign.tar.gz" | shasum -a 256 -c -
+          tar xzf "$RUNNER_TEMP/rcodesign.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apple-codesign-0.29.0-macos-universal" >> "$GITHUB_PATH"
+          git apply "$GITHUB_WORKSPACE/ci/stage4c-wex.patch"
+          git -C graphics apply "$GITHUB_WORKSPACE/ci/stage4c-graphics.patch"
+      - name: Native builds and complete validation
+        env:
+          STAGE4C_RUNNER: ${{ matrix.runner }}
+        run: python3 ci/stage4c_runner.py
+      - name: Upload genuine native artifacts and all raw logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stage4C-${{ matrix.runner }}
+          path: |
+            stage4c-output/**
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,165 @@
+diff --git a/README.md b/README.md
+index 48f9838..e11e670 100644
+--- a/README.md
++++ b/README.md
+@@ -23,7 +23,10 @@ One WEX binary and one graphics pkg cover the following macOS versions:
+ | Ventura | 13.7.8 |
+ | Sonoma | 14.8.9 |
+ | Sequoia | 15.8.x |
+-| Tahoe | 26.7 or newer |
++| Tahoe | 26.6 or newer (26.6 support is experimental) |
++
++The Tahoe 26.6 installer range does not establish runtime compatibility of the
++graphics payloads. Runtime instruction, dependency and ABI checks remain required.
+ 
+ Big Sur through Sonoma require the qualified kernel identities. Sequoia and
+ Tahoe accept servicing updates within their OS family while retaining runtime
+diff --git a/README_ja.md b/README_ja.md
+index 2aa82e2..080f79e 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -19,7 +19,10 @@ WEXとWhateverXe Graphicsは、どちらも最新版を使用してください
+ | Ventura | 13.7.8 |
+ | Sonoma | 14.8.9 |
+ | Sequoia | 15.8.x |
+-| Tahoe | 26.7以上 |
++| Tahoe | 26.6以上（26.6対応は実験的） |
++
++Tahoe 26.6を受け付けるインストーラー範囲は、グラフィックス資材の実行時互換性を保証しません。
++実行時の命令列・依存関係・ABI検査は引き続き必要です。
+ 
+ Big Sur〜Sonomaは検証済みカーネルの識別を必要とします。SequoiaとTahoeでは、実行時の命令列・ABI検査を維持した上で、同じOS系列内の更新を受け付けます。将来の更新が検証済みという意味ではありません。
+ 
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index daf4053..4281ada 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -17979,6 +17979,8 @@ bool XE::comboClockTarget(void *controller,void *port,void *otherPort) {
+     auto s=callbackXE;
+     if(s->adlsDisplaySelected)return adlsClockTarget(controller,port,otherPort);
+     if(!controller || !port || (otherPort && otherPort!=port && !comboClockTarget(controller,otherPort,nullptr)))return false;
++    // Reject a foreign controller before reading its private driver fields.
++    if(controller!=(s->display13FramebufferRequested?s->adlnTopologyController:s->tglObservationController))return false;
+     auto p=static_cast<uint8_t *>(port),c=static_cast<uint8_t *>(controller);
+     auto config=*reinterpret_cast<uint32_t **>(p+0x548);
+     auto access=*reinterpret_cast<uint8_t **>(c+0xC40);
+diff --git a/WhateverXe/kern_xelp_os.hpp b/WhateverXe/kern_xelp_os.hpp
+index ad85a66..3328bfa 100644
+--- a/WhateverXe/kern_xelp_os.hpp
++++ b/WhateverXe/kern_xelp_os.hpp
+@@ -23,7 +23,8 @@ inline OS kernelOS(const char *version) {
+     }
+     // Servicing updates must not silently bypass ABI setup because the build
+     // date/XNU revision changed. Darwin 24.6 cannot distinguish macOS 15.7
+-    // from 15.8: the package enforces 15.8.x. Darwin 25.6+ covers 26.7+.
++    // from 15.8: the package enforces 15.8.x. Darwin 25.6+ also identifies Tahoe 26.6.x; it does not
++    // distinguish the product-version floor enforced by the installer policy.
+     const char *p=version,*prefix="Darwin Kernel Version ";
+     while (*prefix && *p==*prefix) {++p;++prefix;}
+     if (*prefix) return OS::Unknown;
+diff --git a/tests/backlight_adapter.py b/tests/backlight_adapter.py
+index 3e7319e..53e7f21 100644
+--- a/tests/backlight_adapter.py
++++ b/tests/backlight_adapter.py
+@@ -13,6 +13,8 @@ code=r'''
+ #include <map>
+ #include <string>
+ #include <vector>
++#include <memory>
++#include <utility>
+ #include "kern_backlight_profile.hpp"
+ struct Object {
+  unsigned refs=1;bool alive=true;
+@@ -20,23 +22,29 @@ struct Object {
+  void retain(){assert(alive && refs);++refs;}
+  void release(){assert(alive && refs);if(!--refs){alive=false;dispose();}}
+ };
++// Arena owns allocations independently of the simulated IOKit reference counters.
++std::vector<std::unique_ptr<Object>> allocations;
++template<class T,class... Args>T *makeObject(Args&&... args){
++ auto p=std::unique_ptr<T>(new T(std::forward<Args>(args)...));
++ auto raw=p.get();allocations.push_back(std::move(p));return raw;
++}
+ struct OSString:Object {std::string value;explicit OSString(const char *s):value(s){}bool isEqualTo(const char *s){return value==s;}};
+ struct OSNumber:Object {unsigned value;explicit OSNumber(unsigned v):value(v){}unsigned unsigned32BitValue(){return value;}};
+-struct OSData:Object {std::vector<uint8_t> data;OSData(const void *p,size_t n):data((const uint8_t*)p,(const uint8_t*)p+n){}static OSData *withBytes(const void *p,size_t n){return new OSData(p,n);}};
++struct OSData:Object {std::vector<uint8_t> data;OSData(const void *p,size_t n):data((const uint8_t*)p,(const uint8_t*)p+n){}static OSData *withBytes(const void *p,size_t n){return makeObject<OSData>(p,n);}};
+ struct OSDictionary:Object {
+  std::map<std::string,Object*> entries;
+  Object *getObject(const char *key){auto it=entries.find(key);return it==entries.end()?nullptr:it->second;}
+  bool setObject(const char *key,Object *o){assert(alive);o->retain();auto old=getObject(key);entries[key]=o;if(old)old->release();return true;}
+  void removeObject(const char *key){auto old=getObject(key);entries.erase(key);if(old)old->release();}
+  void dispose() override {for(auto &e:entries)e.second->release();entries.clear();}
+- static OSDictionary *withDictionary(OSDictionary *o){auto copy=new OSDictionary;for(auto &e:o->entries)copy->setObject(e.first.c_str(),e.second);return copy;}
++ static OSDictionary *withDictionary(OSDictionary *o){auto copy=makeObject<OSDictionary>();for(auto &e:o->entries)copy->setObject(e.first.c_str(),e.second);return copy;}
+ };
+ struct IOService:Object {
+  IOService *parent=nullptr;bool internal=false;OSDictionary props;
+  IOService *getProvider(){return parent;}Object *getProperty(const char *s){return props.getObject(s);}
+  bool setProperty(const char *s,Object *v){return props.setObject(s,v);}
+- bool setProperty(const char *s,const char *v){return props.setObject(s,new OSString(v));}
+- bool setProperty(const char *s,const void *v,unsigned n){return props.setObject(s,new OSData(v,n));}
++ bool setProperty(const char *s,const char *v){return props.setObject(s,makeObject<OSString>(v));}
++ bool setProperty(const char *s,const void *v,unsigned n){return props.setObject(s,makeObject<OSData>(v,n));}
+  virtual IOService *metaCast(const char *s){return internal && !strcmp(s,"AppleBacklightDisplay")?this:nullptr;}
+ };
+ using IOPCIDevice=IOService;
+@@ -59,7 +67,7 @@ bool native(IOService *panel,IOService *){
+   // AppleBacklight's actual order: remove the candidate dictionary, then
+   // retain the previously borrowed curve in the selected profile.
+   assert(selected->alive);
+-  auto chosen=new OSDictionary;chosen->setObject("F19T1234",selected);
++  auto chosen=makeObject<OSDictionary>();chosen->setObject("F19T1234",selected);
+   panel->setProperty("ApplePanel",chosen);chosen->release();
+  }
+  return true;
+diff --git a/tests/kernel_os_updates.cpp b/tests/kernel_os_updates.cpp
+index faf7d82..9554a55 100644
+--- a/tests/kernel_os_updates.cpp
++++ b/tests/kernel_os_updates.cpp
+@@ -10,7 +10,10 @@ int main() {
+     assert(kernelOS(nullptr)==OS::Unknown);
+     assert(kernelOS("")==OS::Unknown);
+     assert(kernelOS("Darwin Kernel Version 24.6.1: update/RELEASE_X86_64")==OS::Sequoia);
++    // Synthetic Darwin strings exercise OS selection, not GPU compatibility.
++    assert(kernelOS("Darwin Kernel Version 25.6.0: synthetic/RELEASE_X86_64")==OS::Tahoe);
+     assert(kernelOS("Darwin Kernel Version 25.6.1: update/RELEASE_X86_64")==OS::Tahoe);
++    assert(kernelOS("Darwin Kernel Version 25.6.2: synthetic/RELEASE_X86_64")==OS::Tahoe);
+     assert(kernelOS("Darwin Kernel Version 25.7.0: update/RELEASE_X86_64")==OS::Tahoe);
+     const char *rejected[] {
+         "Darwin Kernel Version 23.6.0: update/RELEASE_X86_64",
+diff --git a/tests/tgl_bootstrap_aux_fixture.cpp b/tests/tgl_bootstrap_aux_fixture.cpp
+index 2e39c1b..54302c3 100644
+--- a/tests/tgl_bootstrap_aux_fixture.cpp
++++ b/tests/tgl_bootstrap_aux_fixture.cpp
+@@ -1,3 +1,4 @@
++#include <initializer_list>
+ #include <cassert>
+ #include <cstdint>
+ #include <cstdio>
+diff --git a/tests/xelp_combo_clock_guard.py b/tests/xelp_combo_clock_guard.py
+index 7272e3f..011b64a 100644
+--- a/tests/xelp_combo_clock_guard.py
++++ b/tests/xelp_combo_clock_guard.py
+@@ -35,6 +35,7 @@ int main(){
+   for(unsigned d=0;d<2;++d) {
+    auto p=ports[d];assert(XE::comboClockTarget(ctl,p,nullptr));assert(XE::comboClockTarget(ctl,p,ports[1-d]));
+    assert(!XE::comboClockTarget(nullptr,p,nullptr));assert(!XE::comboClockTarget(access,p,nullptr));
++   assert(!XE::comboClockTarget(reinterpret_cast<void *>(1),p,nullptr));
+    at<void*>(p,0x578)=ctl;assert(!XE::comboClockTarget(ctl,p,nullptr));at<void*>(p,0x578)=access;
+    auto config=at<uint32_t*>(p,0x548);uint32_t clone[6];memcpy(clone,config,sizeof(clone));
+    at<void*>(p,0x548)=clone;assert(!XE::comboClockTarget(ctl,p,nullptr));at<void*>(p,0x548)=config;
+diff --git a/tests/xelp_memory_layout.cpp b/tests/xelp_memory_layout.cpp
+index d21af9a..62a49d6 100644
+--- a/tests/xelp_memory_layout.cpp
++++ b/tests/xelp_memory_layout.cpp
+@@ -11,7 +11,8 @@ int main() {
+   assert(!mmioPages(base,base+4096,0x1000000,0x1000000,first,end));
+   assert(!mmioPages(base,base,0x1000000,0x1000,first,end));
+  }
+- for(auto base:{0ULL,1ULL,UINT64_MAX,0xFFFFFFFF000ULL})
++ const uint64_t invalidBases[]{0,1,UINT64_MAX,0xFFFFFFFF000ULL};
++ for(auto base:invalidBases)
+   assert(!mmioPages(base,base,0x1000000,0x1000000,first,end));
+  unsigned cases=0;
+  for(unsigned gms=1;gms<255;++gms)for(unsigned ggms=1;ggms<4;++ggms) {

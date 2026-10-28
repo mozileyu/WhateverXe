@@ -1,0 +1,256 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5e835fc..71362ac 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,11 @@
+ # Changelog
+ 
++## 0.3.2.266
++
++- Admit Tahoe 26.6 and servicing releases as an experimental installer range, retaining runtime ABI and instruction checks.
++- Keep earlier macOS ranges, signed payloads and provider dependencies unchanged.
++- Exercise generated installer choices and volume checks for the expanded range.
++
+ ## 0.3.2
+ 
+ - Fix OpenGL texture updates and missing geometry for the measured six-bank VS-only and VS/GS URB layouts on Big Sur–Tahoe. Handle all four measured layouts in one rule set while preserving the four/eight-bank corrections.
+diff --git a/README.md b/README.md
+index 59b2b11..190b099 100644
+--- a/README.md
++++ b/README.md
+@@ -30,7 +30,10 @@ See the [changelog](CHANGELOG.md) for changes in each package version.
+ | Ventura | 13.7.8 |
+ | Sonoma | 14.8.9 |
+ | Sequoia | 15.8.x |
+-| Tahoe | 26.7 or newer |
++| Tahoe | 26.6 or newer (26.6 support is experimental) |
++
++The Tahoe 26.6 installer range does not establish runtime compatibility of the
++graphics payloads. Runtime instruction, dependency and ABI checks remain required.
+ 
+ Installer version ranges are not a guarantee of compatibility with future OS
+ updates. The current payloads target builds 20G1443, 21H1320, 22H730, 23J631,
+@@ -90,7 +93,7 @@ On macOS with Xcode Command Line Tools and Python 3.10 or newer:
+ 
+ ```sh
+ python3 tools/build.py
+-python3 tools/test.py dist/WhateverXe-Graphics-0.3.1.pkg
++python3 tools/test.py dist/WhateverXe-Graphics-0.3.2.266.pkg
+ ```
+ 
+ The test also needs Node.js and `rcodesign` 0.29.0; CI supplies both. The builder
+diff --git a/README_ja.md b/README_ja.md
+index 3473bdd..e39224f 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -28,7 +28,10 @@ AppleIntelTGLCompatはpkgに含まれますが、ソースと共有ヘッダー
+ | Ventura | 13.7.8 |
+ | Sonoma | 14.8.9 |
+ | Sequoia | 15.8.x |
+-| Tahoe | 26.7以上 |
++| Tahoe | 26.6以上（26.6対応は実験的） |
++
++Tahoe 26.6を受け付けるインストーラー範囲は、グラフィックス資材の実行時互換性を保証しません。
++実行時の命令列・依存関係・ABI検査は引き続き必要です。
+ 
+ 受付範囲は将来のOS更新での動作保証ではありません。現在の資材の対象buildは
+ 20G1443、21H1320、22H730、23J631、24H32、25G241です。
+@@ -85,7 +88,7 @@ Xcode Command Line ToolsとPython 3.10以上を用意したmacOSで実行しま
+ 
+ ```sh
+ python3 tools/build.py
+-python3 tools/test.py dist/WhateverXe-Graphics-0.3.1.pkg
++python3 tools/test.py dist/WhateverXe-Graphics-0.3.2.266.pkg
+ ```
+ 
+ 検証にはNode.jsと`rcodesign` 0.29.0も必要です。CIでは両方を用意します。
+diff --git a/tools/build.py b/tools/build.py
+index d007549..8777dae 100644
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -25,6 +25,32 @@ def shell_script(path, body):
+     path.chmod(0o755)
+ 
+ 
++def distribution_tree(policy, components):
++    """Generate the same admission ranges and choices used in the final pkg."""
++    version = policy['package_version']
++    dist = ET.Element('installer-gui-script', minSpecVersion='2')
++    ET.SubElement(dist, 'title').text = 'WhateverXe Graphics'
++    ET.SubElement(dist, 'options', customize='never', rootVolumeOnly='true', hostArchitectures='x86_64')
++    ET.SubElement(dist, 'domains', enable_anywhere='false', enable_currentUserHome='false', enable_localSystem='true')
++    ranges = ET.SubElement(ET.SubElement(dist, 'volume-check', script='true'), 'allowed-os-versions')
++    for system in policy['systems']:
++        ET.SubElement(ranges, 'os-version', min=system['minimum'], before=system['before'])
++    outline = ET.SubElement(dist, 'choices-outline')
++    for name in components:
++        component_id = name.replace(' ', '')
++        ET.SubElement(outline, 'line', choice=component_id)
++        selected = 'true'
++        if name != 'Common':
++            s = next(s for s in policy['systems'] if s['payload'] == name)
++            selected = (f"system.compareVersions(system.version.ProductVersion, '{s['minimum']}') >= 0 && "
++                        f"system.compareVersions(system.version.ProductVersion, '{s['before']}') < 0")
++        choice = ET.SubElement(dist, 'choice', id=component_id, title=name, visible='false', enabled='false', selected=selected)
++        ET.SubElement(choice, 'pkg-ref', id=PREFIX + '.' + component_id)
++        ET.SubElement(dist, 'pkg-ref', id=PREFIX + '.' + component_id, version=version,
++                      onConclusion='RequireRestart').text = component_id + '.pkg'
++    return dist
++
++
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument('--output', type=Path, default=ROOT / 'dist')
+@@ -91,26 +117,7 @@ def main():
+                 '--component-plist', str(component_plist), '--ownership', 'recommended',
+                 '--identifier', PREFIX + '.' + component_id, '--version', version,
+                 '--scripts', str(scripts), str(work / (component_id + '.pkg')))
+-        dist = ET.Element('installer-gui-script', minSpecVersion='2')
+-        ET.SubElement(dist, 'title').text = 'WhateverXe Graphics'
+-        ET.SubElement(dist, 'options', customize='never', rootVolumeOnly='true', hostArchitectures='x86_64')
+-        ET.SubElement(dist, 'domains', enable_anywhere='false', enable_currentUserHome='false', enable_localSystem='true')
+-        ranges = ET.SubElement(ET.SubElement(dist, 'volume-check', script='true'), 'allowed-os-versions')
+-        for system in policy['systems']:
+-            ET.SubElement(ranges, 'os-version', min=system['minimum'], before=system['before'])
+-        outline = ET.SubElement(dist, 'choices-outline')
+-        for name in components:
+-            component_id = name.replace(' ', '')
+-            ET.SubElement(outline, 'line', choice=component_id)
+-            selected = 'true'
+-            if name != 'Common':
+-                s = next(s for s in policy['systems'] if s['payload'] == name)
+-                selected = (f"system.compareVersions(system.version.ProductVersion, '{s['minimum']}') >= 0 && "
+-                            f"system.compareVersions(system.version.ProductVersion, '{s['before']}') < 0")
+-            choice = ET.SubElement(dist, 'choice', id=component_id, title=name, visible='false', enabled='false', selected=selected)
+-            ET.SubElement(choice, 'pkg-ref', id=PREFIX + '.' + component_id)
+-            ET.SubElement(dist, 'pkg-ref', id=PREFIX + '.' + component_id, version=version,
+-                          onConclusion='RequireRestart').text = component_id + '.pkg'
++        dist = distribution_tree(policy, components)
+         ET.indent(dist)
+         distribution = work / 'Distribution'
+         ET.ElementTree(dist).write(distribution, encoding='utf-8', xml_declaration=True)
+diff --git a/tools/policy.json b/tools/policy.json
+index d8d7278..821edd5 100644
+--- a/tools/policy.json
++++ b/tools/policy.json
+@@ -1,5 +1,5 @@
+ {
+-  "package_version": "0.3.2",
++  "package_version": "0.3.2.266",
+   "systems": [
+     {
+       "name": "Big Sur",
+@@ -44,7 +44,7 @@
+     {
+       "name": "Tahoe",
+       "major": 26,
+-      "minimum": "26.7",
++      "minimum": "26.6",
+       "before": "27",
+       "payload": "Tahoe",
+       "source_build": "25G241"
+diff --git a/tools/test.py b/tools/test.py
+index cbe6752..6b699b3 100644
+--- a/tools/test.py
++++ b/tools/test.py
+@@ -9,24 +9,21 @@ import tempfile
+ import xml.etree.ElementTree as ET
+ from pathlib import Path
+ from kext_dependencies import check_dependencies
++from test_policy import VERSION_CASES
+ 
+ parser = argparse.ArgumentParser(description=__doc__)
+ parser.add_argument('package', type=Path)
+ parser.add_argument('--rcodesign', default='rcodesign')
+ args = parser.parse_args()
++subprocess.run([sys.executable, str(Path(__file__).with_name('test_policy.py'))], check=True)
+ subprocess.run([sys.executable, str(Path(__file__).with_name('test_uninstall.py'))], check=True)
+ subprocess.run([sys.executable, str(Path(__file__).with_name('test_dependencies.py'))], check=True)
+ subprocess.run([sys.executable, str(Path(__file__).with_name('verify.py')), '--rcodesign', args.rcodesign], check=True)
+ manifest = json.loads((args.package.parent / 'manifest.json').read_text())
+ assert (args.package.parent / 'SHA256SUMS').read_text() == (
+     hashlib.sha256(args.package.read_bytes()).hexdigest() + '  ' + args.package.name + '\n')
+-cases = {
+-    '11.7.10': None, '11.7.11': 'Big Sur', '12.7.5': None, '12.7.6': 'Monterey',
+-    '13.7.7': None, '13.7.8': 'Ventura', '14.8.8': None, '14.8.9': 'Sonoma',
+-    '15.7.9': None, '15.8': 'Sequoia', '15.8.0': 'Sequoia', '15.8.99': 'Sequoia',
+-    '15.9': None, '16.0': None, '26.6.99': None, '26.7': 'Tahoe',
+-    '26.7.1': 'Tahoe', '26.8': 'Tahoe', '26.99.99': 'Tahoe', '27.0': None,
+-}
++cases = VERSION_CASES
++
+ with tempfile.TemporaryDirectory(prefix='xe-pkg-test-') as tmp:
+     root = Path(tmp) / 'expanded'
+     subprocess.run(['pkgutil', '--expand-full', str(args.package.resolve()), str(root)], check=True)
+diff --git a/tools/test_policy.py b/tools/test_policy.py
+new file mode 100644
+--- /dev/null
++++ b/tools/test_policy.py
+@@ -0,0 +1,67 @@
++#!/usr/bin/env python3
++"""Portable tests of the actual Distribution generator; no simulated pkg tools."""
++import json
++import subprocess
++import unittest
++import xml.etree.ElementTree as ET
++from pathlib import Path
++from build import distribution_tree
++
++VERSION_CASES = {
++    '11.7.10': None, '11.7.11': 'Big Sur', '12.7.5': None, '12.7.6': 'Monterey',
++    '13.7.7': None, '13.7.8': 'Ventura', '14.8.8': None, '14.8.9': 'Sonoma',
++    '15.7.9': None, '15.8': 'Sequoia', '15.8.0': 'Sequoia', '15.8.99': 'Sequoia',
++    '15.9': None, '16.0': None, '26.0': None, '26.5.99': None, '26.6': 'Tahoe',
++    '26.6.0': 'Tahoe', '26.6.1': 'Tahoe', '26.6.2': 'Tahoe',
++    '26.6.99': 'Tahoe', '26.7': 'Tahoe',
++    '26.7.1': 'Tahoe', '26.7.2': 'Tahoe', '26.8': 'Tahoe', '26.99.99': 'Tahoe', '27.0': None,
++}
++
++class PolicyTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.policy = json.loads(Path(__file__).with_name('policy.json').read_text())
++        cls.names = ['Common'] + [s['payload'] for s in cls.policy['systems']]
++        cls.tree = ET.fromstring(ET.tostring(distribution_tree(cls.policy, cls.names)))
++
++    def test_numeric_boundaries_and_actual_choices(self):
++        choices = {x.attrib['title']: x.attrib['selected'] for x in self.tree.findall('choice')}
++        ranges = [x.attrib for x in self.tree.findall('./volume-check/allowed-os-versions/os-version')]
++        js = r"""const input=JSON.parse(process.argv[1]);
++const system={version:{},compareVersions(a,b){
++  a=a.split('.').map(Number); b=b.split('.').map(Number);
++  for(let i=0;i<Math.max(a.length,b.length);i++){
++    const d=(a[i]||0)-(b[i]||0); if(d)return Math.sign(d);
++  }return 0;
++}};
++for(const [version,expected] of Object.entries(input.cases)){
++ system.version.ProductVersion=version;
++ const actual=Object.entries(input.choices).filter(([id,expr])=>id!=='Common'&&eval(expr)).map(([id])=>id);
++ if(JSON.stringify(actual)!==JSON.stringify(expected?[expected]:[]))throw new Error(version);
++ const admitted=input.ranges.some(r=>system.compareVersions(version,r.min)>=0&&system.compareVersions(version,r.before)<0);
++ if(admitted!==Boolean(expected))throw new Error('volume-check '+version);
++}
++console.log('PASS: '+Object.keys(input.cases).length+' actual choice and volume-check boundaries');"""
++        subprocess.run(['node', '-e', js, json.dumps({'choices': choices, 'ranges': ranges, 'cases': VERSION_CASES})], check=True)
++
++    def test_older_system_policy_unchanged(self):
++        expected = [('11.7.11', '12'), ('12.7.6', '13'), ('13.7.8', '14'), ('14.8.9', '15'), ('15.8', '15.9')]
++        self.assertEqual([(s['minimum'],s['before']) for s in self.policy['systems'][:-1]], expected)
++
++    def test_tahoe_range(self):
++        self.assertEqual((self.policy['systems'][-1]['minimum'], self.policy['systems'][-1]['before']), ('26.6','27'))
++
++    def test_payload_provenance_is_not_relabelled(self):
++        self.assertEqual(self.policy['systems'][-1]['source_build'], '25G241')
++
++    def test_common_and_component_versions(self):
++        self.assertEqual(self.tree.find("choice[@id='Common']").attrib['selected'], 'true')
++        for ref in self.tree.findall('pkg-ref'):
++            self.assertEqual(ref.attrib['version'], self.policy['package_version'])
++
++    def test_intel_and_system_volume_only(self):
++        self.assertEqual(self.tree.find('options').attrib['hostArchitectures'], 'x86_64')
++        self.assertEqual(self.tree.find('domains').attrib, {'enable_anywhere':'false','enable_currentUserHome':'false','enable_localSystem':'true'})
++
++if __name__ == '__main__':
++    unittest.main()
