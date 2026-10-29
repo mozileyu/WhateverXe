@@ -35,11 +35,33 @@ if package.exists():
  run('pkg-expand-for-version-check',['pkgutil','--expand-full',package,expanded])
  import xml.etree.ElementTree as ET
  refs=ET.parse(expanded/'Distribution').getroot().findall('pkg-ref')
- assert all(x.attrib['version']=='0.3.2.266' for x in refs)
- for p in expanded.glob('*.pkg/PackageInfo'):assert ET.parse(p).getroot().attrib['version']=='0.3.2.266'
+ # productbuild adds separate bundle-version references without package versions.
+ packages=[x for x in refs if (x.text or '').strip().startswith('#')]
+ assert len(packages)==7 and all(x.attrib.get('version')=='0.3.2.266' for x in packages)
+ infos=list(expanded.glob('*.pkg/PackageInfo'))
+ assert len(infos)==7 and all(ET.parse(p).getroot().attrib['version']=='0.3.2.266' for p in infos)
+ (O/'Package-Version-Verification.json').write_text(json.dumps({'version':'0.3.2.266','distribution_packages':len(packages),'component_packageinfos':len(infos),'pkgutil_expand_exit':results['pkg-expand-for-version-check']['returncode'],'PASS':True},indent=2))
  shutil.rmtree(expanded)
  for p in (O/'RELEASE').glob('*.kext/Contents/Info.plist'):
   info=plistlib.loads(p.read_bytes());(O/(p.parent.parent.name+'.Info.json')).write_text(json.dumps(info,default=str,indent=2))
+# Static native inspection only. No loading, installation or GPU calls.
+for p in (O/'RELEASE').glob('*.kext/Contents/MacOS/*'):
+ name=p.name
+ run(name+'-file',['file',p])
+ run(name+'-imports',['xcrun','nm','-u',p])
+ run(name+'-signature',['codesign','-d','--verbose=4',p],gate=False)
+system_providers={}
+for p in pathlib.Path('/System/Library/Extensions').glob('*.kext/Contents/Info.plist'):
+ try:
+  d=plistlib.loads(p.read_bytes());system_providers[d['CFBundleIdentifier']]={'version':d.get('CFBundleVersion'),'compatible':d.get('OSBundleCompatibleVersion'),'path':str(p)}
+ except (KeyError,ValueError,OSError):pass
+(O/'Runner-System-Kexts.json').write_text(json.dumps(system_providers,indent=2))
+clients={}
+for osname in ['Common','Tahoe']:
+ for p in (g/'payloads'/osname).rglob('Contents/Info.plist'):
+  d=plistlib.loads(p.read_bytes())
+  if d.get('OSBundleLibraries'):clients[d['CFBundleIdentifier']]={'requires':d['OSBundleLibraries'],'runner_system_providers':{k:system_providers.get(k) for k in d['OSBundleLibraries']},'scope':'Plist inventory only; missing kernel-collection providers and private symbol/structure compatibility remain unverified.'}
+(O/'Native-Dependency-Inventory.json').write_text(json.dumps(clients,indent=2))
 import tarfile
 with tarfile.open(O/'Native-RELEASE-kexts.tar.gz','w:gz') as tar:
  for bundle in (O/'RELEASE').glob('*.kext'):
