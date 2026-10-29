@@ -1,0 +1,40 @@
+name: Stage4D FX506HM diagnostic native build
+on:
+  push:
+    branches: [codex/stage4d-fx506hm-input]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-26-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: VoodooI2C/VoodooI2C
+          ref: e3ac3ed207170c39db88d6a67a76cc9fd3a1895a
+          submodules: recursive
+          path: voodoo
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacKernelSDK
+          ref: 05094e5e88cec7caedbfb35e8449ed0db94bf95b
+          path: voodoo/MacKernelSDK
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Original upstream build with scoped diagnostic patch
+        run: python3 ci/stage4d_native.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Stage4D-native-input
+          path: stage4d-output/**
+          if-no-files-found: error
+          retention-days: 14
