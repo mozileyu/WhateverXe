@@ -29,6 +29,13 @@ try:
   with tarfile.open(O/'Native-input-kexts.tar.gz','w:gz') as t:
    for p in dest.iterdir():t.add(p,arcname=p.name)
   run('source-diff',['git','diff','--binary'],v)
+  # Complete tracked corresponding source, including exact recursive submodules.
+  files=subprocess.check_output(['git','ls-files','--cached','--recurse-submodules','-z'],cwd=v).decode().split('\0')
+  with tarfile.open(O/'Corresponding-Source.tar.gz','w:gz') as t:
+   for rel in files:
+    if rel and (v/rel).is_file():t.add(v/rel,arcname=rel,recursive=False)
+  (O/'Source-SHA256.json').write_text(json.dumps({rel:hashlib.sha256((v/rel).read_bytes()).hexdigest() for rel in files if rel and (v/rel).is_file()},indent=2))
+
 except Exception as e:
  (L/'exception.txt').write_text(repr(e));results['exception']={'returncode':1,'message':repr(e)}
 (O/'downloads.json').write_text(json.dumps(downloads,indent=2));(O/'results.json').write_text(json.dumps(results,indent=2))
