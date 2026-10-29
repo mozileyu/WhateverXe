@@ -1,0 +1,50 @@
+name: Stage4H minimal Tahoe call fix native verification
+on:
+  push:
+    branches: [codex/stage4h-25g83-graphics]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-26-intel
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacKernelSDK
+          ref: 05094e5e88cec7caedbfb35e8449ed0db94bf95b
+          path: MacKernelSDK
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/Lilu
+          ref: 1.7.2
+          path: build/dependencies/Lilu
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply exact Stage4C baseline and minimal instruction fix
+        run: |
+          mkdir -p Lilu.kext/Contents/Resources
+          ln -s "$GITHUB_WORKSPACE/build/dependencies/Lilu/Lilu/Headers" Lilu.kext/Contents/Resources/Headers
+          ln -s "$GITHUB_WORKSPACE/build/dependencies/Lilu/Lilu/Library" Lilu.kext/Contents/Resources/Library
+          git apply ci/stage4c-wex.patch
+          git apply ci/stage4h-wex.patch
+      - name: Native CPU regression and genuine kext builds
+        run: python3 ci/stage4h_runner.py
+      - name: Preserve new products and raw logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stage4H-macos-26-intel
+          path: stage4h-output/**
+          retention-days: 30
+          if-no-files-found: error
