@@ -2,7 +2,7 @@ name: Stage5B Voodoo native
 on:
   push:
     branches: [codex/stage5b-voodoo]
-    paths: [.github/workflows/stage5b-voodoo.yml]
+    paths: [.github/workflows/stage5b-voodoo.yml, ci/stage5b_voodoo.py, ci/stage5b-publish.patch]
   workflow_dispatch:
 permissions:
   contents: read
