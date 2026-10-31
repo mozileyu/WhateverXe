@@ -1,12 +1,10 @@
 --- a/VoodooI2C/VoodooI2C/VoodooI2CController/VoodooI2CControllerDriver.cpp
 +++ b/VoodooI2C/VoodooI2C/VoodooI2CController/VoodooI2CControllerDriver.cpp
-@@ -357,36 +357,57 @@
- }
+@@ -358,35 +358,57 @@
  
  IOReturn VoodooI2CControllerDriver::publishNubs() {
--    IOLog("%s::%s Publishing device nubs\n", getName(), bus_device.name);
+     IOLog("%s::%s Publishing device nubs\n", getName(), bus_device.name);
 -
-+    IOLog("%s::%s Publishing device nubs", getName(), bus_device.name);
 +    // Observe EVERY executed controller path; identity guards remain upstream.
 +    setProperty("Stage5B_Schema", 1, 32);
 +    setProperty("Stage5B_PublishEntered", kOSBooleanTrue);
@@ -24,18 +22,16 @@
 -
 +    }
      while ((child = OSDynamicCast(IOService, children->getNextObject()))) {
--        IOLog("%s::%s Found I2C device: %s\n", getName(), bus_device.name, getMatchedName(child));
--
 +        ++seen;
 +        if (child->getName() && !strcmp(child->getName(), "TPD0")) tpd0=true;
-+        IOLog("%s::%s Found I2C device: %s", getName(), bus_device.name, getMatchedName(child));
+         IOLog("%s::%s Found I2C device: %s\n", getName(), bus_device.name, getMatchedName(child));
+-
          VoodooI2CDeviceNub* device_nub = OSTypeAlloc(VoodooI2CDeviceNub);
          OSDictionary* child_properties = child->dictionaryWithProperties();
 -
 -        if (!device_nub ||
 -            !device_nub->init(child_properties) ||
 -            !device_nub->attach(this, child)) {
--            IOLog("%s::%s Could not initialise nub for %s\n", getName(), bus_device.name, getMatchedName(child));
 +        bool initOK=false, attachOK=false;
 +        if (device_nub) {
 +            ++allocated;
@@ -45,18 +41,17 @@
 +        }
 +        if (!device_nub || !initOK || !attachOK) {
 +            setProperty("Stage5B_LastStage", !device_nub ? "ALLOC_FAILED" : !initOK ? "INIT_FAILED" : "ATTACH_FAILED");
-+            IOLog("%s::%s Could not initialise nub for %s", getName(), bus_device.name, getMatchedName(child));
+             IOLog("%s::%s Could not initialise nub for %s\n", getName(), bus_device.name, getMatchedName(child));
          } else if (!device_nub->start(this)) {
 +            setProperty("Stage5B_LastStage", "START_FAILED");
              device_nub->detach(this);
--            IOLog("%s::%s Could not start nub for %s\n", getName(), bus_device.name, getMatchedName(child));
-+            IOLog("%s::%s Could not start nub for %s", getName(), bus_device.name, getMatchedName(child));
+             IOLog("%s::%s Could not start nub for %s\n", getName(), bus_device.name, getMatchedName(child));
          } else {
 +            ++started;
              device_nubs->setObject(device_nub);
          }
 -
--        OSSafeReleaseNULL(child_properties);
+         OSSafeReleaseNULL(child_properties);
          OSSafeReleaseNULL(device_nub);
      }
      children->release();
@@ -74,3 +69,4 @@
      return kIOReturnSuccess;
  }
  
+
