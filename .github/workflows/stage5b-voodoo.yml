@@ -1,0 +1,23 @@
+name: Stage5B Voodoo native
+on:
+  push:
+    branches: [codex/stage5b-voodoo]
+    paths: [.github/workflows/stage5b-voodoo.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 40
+    env:
+      PROJECT_TYPE: KEXT
+      JOB_TYPE: BUILD
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 ci/stage5b_voodoo.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Stage5B-Voodoo-native
+          path: out
